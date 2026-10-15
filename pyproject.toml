@@ -8,11 +8,20 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "albumentations>=2.0.8",
     "numpy>=2.5.4",
 ]
 
 [project.scripts]
 ppe-detection-evaluation = "ppe_detection_evaluation:main"
+
+[project.optional-dependencies]
+train = [
+    "matplotlib>=3.11.2",
+    "torch>=2.14.1",
+    "torchvision>=0.29.1",
+    "ultralytics>=8.4.177",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13.0"]
@@ -21,4 +30,5 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "ipykernel>=7.4.0",
+    "pytest>=9.1.1",
 ]
