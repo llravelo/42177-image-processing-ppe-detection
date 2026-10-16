@@ -31,7 +31,7 @@ NOISE_STD_RANGE = (0.02, 0.06)
 JPEG_QUALITY_RANGE = (40, 90)
 
 # A box that loses more than 60 % of its area to the frame edge no longer shows enough of the
-# head/torso to tell e.g. Hardhat from NO-Hardhat, so it is dropped rather than kept as label noise.
+# head/torso to tell e.g. helmet from no_helmet, so it is dropped rather than kept as label noise.
 MIN_VISIBILITY = 0.4
 MIN_BOX_SIZE = 3
 
@@ -75,9 +75,14 @@ def build_train_transform(seed: int | None = None) -> A.Compose:
     )
 
 
-def build_eval_transform() -> A.Compose:
-    # Identity for the 640×640 Roboflow export; only resizes if a differently sized image slips in.
-    return A.Compose([A.Resize(IMAGE_SIZE, IMAGE_SIZE)], bbox_params=_bbox_params())
+def resize_example(
+    image: np.ndarray, boxes: np.ndarray, labels: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Evaluation preprocessing: stretch to 640×640 like training does, scaling the boxes and never dropping any."""
+    h, w = image.shape[:2]
+    resized = cv2.resize(image, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_LINEAR)  # A.Resize's default
+    scale = np.array([IMAGE_SIZE / w, IMAGE_SIZE / h, IMAGE_SIZE / w, IMAGE_SIZE / h], dtype=np.float32)
+    return resized, (boxes.reshape(-1, 4) * scale).astype(np.float32), labels
 
 
 def sample_seed(seed: int, epoch: int, key: str) -> int:
@@ -87,10 +92,15 @@ def sample_seed(seed: int, epoch: int, key: str) -> int:
 
 
 class SharedAugmentation:
-    def __init__(self, seed: int = 0, train: bool = True) -> None:
+    """The training augmentation, reseeded per image so it is identical across models and DataLoader workers.
+
+    Albumentations otherwise draws from a generator whose state depends on the worker process and on how many
+    images it has already augmented (batch size, shuffle order), so each model would see different examples.
+    """
+
+    def __init__(self, seed: int = 0) -> None:
         self.seed = seed
-        self.train = train
-        self.transform = build_train_transform(seed) if train else build_eval_transform()
+        self.transform = build_train_transform(seed)
 
     def __call__(
         self,
@@ -98,12 +108,11 @@ class SharedAugmentation:
         boxes: np.ndarray,
         labels: np.ndarray,
         *,
-        epoch: int = 0,
-        key: str = "",
+        epoch: int,
+        key: str,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Augment an RGB uint8 image with pixel xyxy `boxes` and 0-based class `labels`."""
-        if self.train:
-            self.transform.set_random_seed(sample_seed(self.seed, epoch, key))
+        self.transform.set_random_seed(sample_seed(self.seed, epoch, key))
         out = self.transform(image=image, bboxes=boxes.reshape(-1, 4), labels=labels)
         return (
             out["image"],

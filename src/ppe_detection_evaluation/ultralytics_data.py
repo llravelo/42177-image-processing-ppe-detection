@@ -1,4 +1,4 @@
-"""Ultralytics glue: train YOLO26-M / RT-DETR-L on the shared augmentation instead of Ultralytics' own.
+"""Train YOLO26-M / RT-DETR-L on the shared augmentation instead of Ultralytics' own.
 
 The training dataset bypasses Ultralytics' augmentation stack entirely: `__getitem__` loads each image
 through `load_training_example`, the same function the torchvision dataset uses, and only Ultralytics'
@@ -20,10 +20,8 @@ from ultralytics.utils import colorstr
 from ultralytics.utils.instance import Instances
 from ultralytics.utils.torch_utils import unwrap_model
 
-from .augment import IMAGE_SIZE, SharedAugmentation
-from .data import list_images, load_training_example, xyxy_to_cxcywh
-from .framework import EvaluationFramework
-from .model_configs import ModelConfig
+from .augment import SharedAugmentation
+from .data import Example, load_training_example
 
 # Zeroed so the saved args.yaml documents that no built-in augmentation ran. The shared dataset ignores
 # these anyway, except multi_scale, which the trainer applies to whole batches.
@@ -83,6 +81,15 @@ class _SharedAugmentationMixin:
             ),
         }
         return self.transforms(sample)
+
+    def as_raw_example(self, index: int) -> Example:
+        """What the model is actually fed, converted back to (path, RGB uint8, xyxy, 0-based labels)."""
+        sample = self[index]
+        image = sample["img"].permute(1, 2, 0).numpy()
+        h, w = image.shape[:2]
+        cx, cy, bw, bh = (sample["bboxes"].numpy() * [w, h, w, h]).T
+        boxes = np.column_stack([cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2])
+        return sample["im_file"], image, boxes, sample["cls"].numpy().reshape(-1).astype(np.int64)
 
 
 class SharedAugmentationYOLODataset(_SharedAugmentationMixin, YOLODataset):
@@ -150,40 +157,3 @@ class SharedAugmentationRTDETRTrainer(RTDETRTrainer):
         if mode != "train":
             return super().build_dataset(img_path, mode, batch)
         return _train_dataset(SharedAugmentationRTDETRDataset, self.args, self.data, img_path, batch)
-
-
-def as_raw_example(dataset: _SharedAugmentationMixin, index: int) -> tuple[str, np.ndarray, np.ndarray, np.ndarray]:
-    """What the model is actually fed, converted back to (path, RGB uint8, xyxy, 0-based labels)."""
-    sample = dataset[index]
-    image = sample["img"].permute(1, 2, 0).numpy()
-    h, w = image.shape[:2]
-    cx, cy, bw, bh = (sample["bboxes"].numpy() * [w, h, w, h]).T
-    boxes = np.column_stack([cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2])
-    return sample["im_file"], image, boxes, sample["cls"].numpy().reshape(-1).astype(np.int64)
-
-
-def evaluate(model, root: str | Path, split: str, config: ModelConfig, device: str | None = None) -> EvaluationFramework:
-    """Run `model.predict` on the eval-transformed split and score it with the evaluation framework."""
-    eval_aug = SharedAugmentation(train=False)
-    fw = EvaluationFramework(config)
-    for path in list_images(root, split):
-        image, gt_boxes, gt_labels = load_training_example(path, eval_aug, epoch=0)
-        result = model.predict(
-            np.ascontiguousarray(image[..., ::-1]),  # predict() expects BGR arrays
-            imgsz=IMAGE_SIZE,
-            conf=fw.score_threshold,
-            max_det=fw.max_detections,
-            device=device,
-            verbose=False,
-        )[0]
-        h, w = image.shape[:2]
-        fw.add(
-            path.stem,
-            result.boxes.xyxy.cpu().numpy(),
-            result.boxes.conf.cpu().numpy(),
-            result.boxes.cls.cpu().numpy(),
-            xyxy_to_cxcywh(gt_boxes, w, h),
-            gt_labels,
-            latency_ms=sum(result.speed.values()),
-        )
-    return fw

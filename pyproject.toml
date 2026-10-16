@@ -9,19 +9,18 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "albumentations>=2.0.8",
-    "numpy>=2.5.4",
-]
-
-[project.scripts]
-ppe-detection-evaluation = "ppe_detection_evaluation:main"
-
-[project.optional-dependencies]
-train = [
+    "jupyterlab>=4.6.4",
     "matplotlib>=3.11.2",
+    "numpy>=2.5.4",
+    "opencv-python>=5.0.0",
+    "pyyaml>=6.0.3",
     "torch>=2.14.1",
     "torchvision>=0.29.1",
     "ultralytics>=8.4.177",
 ]
+
+[project.scripts]
+ppe-detection-evaluation = "ppe_detection_evaluation:main"
 
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13.0"]

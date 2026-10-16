@@ -11,7 +11,14 @@ wheels/
 
 .DS_Store
 
+# Jupyter autosaves
+.ipynb_checkpoints/
+
 # Datasets, training runs and weights
 data/
 runs/
+models/
 *.pt
+
+# Local secrets
+.env

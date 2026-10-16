@@ -1,8 +1,6 @@
 import hashlib
-import json
 import shutil
-import time
-import urllib.parse
+import tempfile
 import urllib.request
 import zipfile
 from collections.abc import Callable, Iterable
@@ -10,78 +8,64 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import torch
 import yaml
 
-from .augment import SharedAugmentation
+from .augment import SharedAugmentation, resize_example
 from .classes import DEFAULT_CLASS_NAMES
 
-ROBOFLOW_WORKSPACE = "roboflow-universe-projects"
-ROBOFLOW_PROJECT = "construction-site-safety"
-ROBOFLOW_VERSION = 30
+DATASET_URL = "https://github.com/ultralytics/assets/releases/download/v0.0.0/construction-ppe.zip"
+# Class order in the archive's data.yaml; the ids are kept, only "none" is renamed (see classes.py).
+SOURCE_CLASS_NAMES = (
+    "helmet", "gloves", "vest", "boots", "goggles", "none", "Person", "no_helmet", "no_goggle", "no_gloves", "no_boots",
+)
 SPLITS = ("train", "valid", "test")
+SOURCE_SPLITS = {"train": "train", "valid": "val", "test": "test"}
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp")
 
 
-def download_dataset(
-    root: str | Path,
-    api_key: str,
-    *,
-    workspace: str = ROBOFLOW_WORKSPACE,
-    project: str = ROBOFLOW_PROJECT,
-    version: int = ROBOFLOW_VERSION,
-    export_format: str = "yolov8",
-    timeout_s: float = 600.0,
-) -> Path:
-    """Download a Roboflow export in YOLO TXT format into `root`; no-op if it is already there."""
+def download_dataset(root: str | Path, url: str = DATASET_URL) -> Path:
+    """Download Ultralytics Construction-PPE into `root` as <split>/{images,labels}; no-op if it is already there."""
     root = Path(root)
     if (root / "data.yaml").exists():
         return root
 
-    query = urllib.parse.urlencode({"api_key": api_key})
-    url = f"https://api.roboflow.com/{workspace}/{project}/{version}/{export_format}?{query}"
-    # Roboflow generates exports lazily; the endpoint returns progress until the zip link is ready.
-    deadline = time.monotonic() + timeout_s
-    while True:
-        with urllib.request.urlopen(url) as resp:
-            payload = json.load(resp)
-        link = payload.get("export", {}).get("link")
-        if link:
-            break
-        if time.monotonic() > deadline:
-            raise TimeoutError(f"Roboflow export not ready after {timeout_s:.0f}s: {payload}")
-        time.sleep(5)
+    root.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=root.parent) as tmp:
+        tmp = Path(tmp)
+        archive = tmp / "dataset.zip"
+        with urllib.request.urlopen(url) as resp, archive.open("wb") as f:
+            shutil.copyfileobj(resp, f)
+        with zipfile.ZipFile(archive) as zf:
+            zf.extractall(tmp / "src")
+        src = tmp / "src"
 
-    root.mkdir(parents=True, exist_ok=True)
-    archive = root / "export.zip"
-    with urllib.request.urlopen(link) as resp, archive.open("wb") as f:
-        shutil.copyfileobj(resp, f)
-    with zipfile.ZipFile(archive) as zf:
-        zf.extractall(root)
-    archive.unlink()
+        names = yaml.safe_load((src / "data.yaml").read_text())["names"]
+        names = tuple(names.values() if isinstance(names, dict) else names)
+        if names != SOURCE_CLASS_NAMES:
+            raise ValueError(f"Unexpected class order in the archive: {names}")
+
+        # The archive uses images/<split> and labels/<split>; this repo pairs <split>/images with <split>/labels.
+        staging = tmp / "out"
+        for split, source in SOURCE_SPLITS.items():
+            (staging / split).mkdir(parents=True)
+            shutil.move(src / "images" / source, staging / split / "images")
+            shutil.move(src / "labels" / source, staging / split / "labels")
+        config = {"train": "train/images", "val": "valid/images", "test": "test/images"}
+        config |= {"nc": len(DEFAULT_CLASS_NAMES), "names": list(DEFAULT_CLASS_NAMES)}
+        (staging / "data.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+        staging.rename(root)  # last step, so an interrupted download never leaves a half-built dataset
     return root
 
 
-def check_dataset(root: str | Path, class_names: tuple[str, ...] = DEFAULT_CLASS_NAMES) -> dict:
-    """Check class order and report split sizes plus the Roboflow preprocessing/augmentation notes."""
+def check_dataset(root: str | Path, class_names: tuple[str, ...] = DEFAULT_CLASS_NAMES) -> dict[str, int]:
+    """Check the class order and return the number of images per split."""
     root = Path(root)
-    data_yaml = yaml.safe_load((root / "data.yaml").read_text())
-    names = data_yaml["names"]
+    names = yaml.safe_load((root / "data.yaml").read_text())["names"]
     names = tuple(names.values() if isinstance(names, dict) else names)
     if names != tuple(class_names):
         raise ValueError(f"Class order in data.yaml {names} does not match {tuple(class_names)}")
-
-    notes = []
-    readme = root / "README.roboflow.txt"
-    if readme.exists():
-        notes = [
-            line.strip()
-            for line in readme.read_text().splitlines()
-            if any(word in line.lower() for word in ("augment", "resize", "orient", "following"))
-        ]
-    return {
-        "splits": {split: len(list_images(root, split)) for split in SPLITS if (root / split).exists()},
-        "roboflow_notes": notes,
-    }
+    return {split: len(list_images(root, split)) for split in SPLITS if (root / split).exists()}
 
 
 def class_box_stats(
@@ -170,8 +154,13 @@ def load_training_example(
     return augmentation(image, boxes, labels, epoch=epoch, key=Path(image_path).name)
 
 
+def load_eval_example(image_path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Validation/test counterpart of `load_training_example`: no augmentation, only the resize to 640×640."""
+    return resize_example(*load_example(image_path))
+
+
 def write_ultralytics_yaml(root: str | Path, class_names: tuple[str, ...] = DEFAULT_CLASS_NAMES) -> Path:
-    # Roboflow's data.yaml uses relative paths that Ultralytics resolves against the CWD, so write absolute ones.
+    # Relative paths in data.yaml are resolved against the CWD by Ultralytics, so write absolute ones.
     root = Path(root).resolve()
     config = {
         "path": str(root),
@@ -186,6 +175,43 @@ def write_ultralytics_yaml(root: str | Path, class_names: tuple[str, ...] = DEFA
 
 
 Example = tuple[str, np.ndarray, np.ndarray, np.ndarray]
+
+
+class TorchvisionDataset(torch.utils.data.Dataset):
+    """Training images through the shared augmentation, in torchvision's detection format.
+
+    Returns a float image in [0, 1] and a target with pixel xyxy `boxes` and `labels` shifted by +1 (0 is background,
+    matching `label_offset=1` in model_configs). Images whose boxes are all dropped stay in as background examples.
+    Lives in the package rather than a notebook because DataLoader workers must be able to import it.
+    """
+
+    def __init__(self, root: str | Path, split: str, augmentation: SharedAugmentation) -> None:
+        self.image_paths = list_images(root, split)
+        self.augmentation = augmentation
+        self.epoch = 0
+
+    def set_epoch(self, epoch: int) -> None:
+        # Workers are re-created every epoch (persistent_workers=False), so they pick this up.
+        self.epoch = epoch
+
+    def __len__(self) -> int:
+        return len(self.image_paths)
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        image, boxes, labels = load_training_example(self.image_paths[index], self.augmentation, self.epoch)
+        image = torch.from_numpy(np.ascontiguousarray(image)).permute(2, 0, 1).float() / 255
+        return image, {"boxes": torch.from_numpy(boxes).reshape(-1, 4), "labels": torch.from_numpy(labels + 1)}
+
+    def as_raw_example(self, index: int) -> Example:
+        """What the model is actually fed, converted back to (path, RGB uint8, xyxy, 0-based labels)."""
+        image, target = self[index]
+        image = (image * 255).round().byte().permute(1, 2, 0).numpy()
+        return str(self.image_paths[index]), image, target["boxes"].numpy(), target["labels"].numpy() - 1
+
+
+def collate(batch):
+    """Detection batches are lists: images and targets differ in size per example."""
+    return tuple(zip(*batch))
 
 
 def verify_same_examples(
