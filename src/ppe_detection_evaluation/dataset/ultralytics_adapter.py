@@ -1,8 +1,8 @@
 """Train YOLO26-M / RT-DETR-L on the shared augmentation instead of Ultralytics' own.
 
-The training dataset bypasses Ultralytics' augmentation stack entirely: `__getitem__` loads each image
-through `load_training_example`, the same function the torchvision dataset uses, and only Ultralytics'
-eval-mode transforms (a no-op 640×640 letterbox and `Format`) run afterwards.
+The training datasets override `build_transforms`, Ultralytics' hook for defining augmentation, with two steps:
+`SharedAugmentationTransform`, which produces each example through `load_training_example` (the same function the
+torchvision dataset uses), and Ultralytics' `Format`, which converts it to the tensors the trainer expects.
 """
 
 from pathlib import Path
@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 import yaml
 from ultralytics.cfg import get_cfg
-from ultralytics.data.augment import Compose
+from ultralytics.data.augment import Compose, Format
 from ultralytics.data.dataset import YOLODataset
 from ultralytics.data.utils import check_det_dataset
 from ultralytics.models.rtdetr.train import RTDETRTrainer
@@ -25,8 +25,8 @@ from ..classes import DEFAULT_CLASS_NAMES
 from .augmentations import SharedAugmentation
 from .core import Example, load_training_example
 
-# Zeroed so the saved args.yaml documents that no built-in augmentation ran. The shared dataset ignores
-# these anyway, except multi_scale, which the trainer applies to whole batches.
+# The datasets never build Ultralytics' augmentation, so these are zeroed only so the saved args.yaml documents that
+# none ran. multi_scale is the exception: the trainer applies it to whole batches, outside the dataset.
 DISABLE_BUILTIN_AUGMENTATION: dict[str, Any] = {
     "mosaic": 0.0,
     "close_mosaic": 0,
@@ -63,6 +63,37 @@ def write_ultralytics_yaml(root: str | Path, class_names: tuple[str, ...] = DEFA
     path.write_text(yaml.safe_dump(config, sort_keys=False))
     return path
 
+class SharedAugmentationTransform:
+    """Ultralytics transform that replaces a sample's image and labels with the shared pipeline's output.
+
+    The image is re-read through `load_training_example` instead of using the one Ultralytics loaded: Ultralytics
+    resizes YOLO images keeping their aspect ratio, and its label cache can drop or merge boxes, so either would
+    make these models see different examples than the torchvision ones.
+    """
+
+    def __init__(self, dataset: "_SharedAugmentationMixin") -> None:
+        self.dataset = dataset
+
+    def __call__(self, sample: dict[str, Any]) -> dict[str, Any]:
+        image, boxes, labels = load_training_example(
+            sample["im_file"], self.dataset.shared_augmentation, self.dataset.epoch
+        )
+        h, w = image.shape[:2]
+        sample.update(
+            img=np.ascontiguousarray(image[..., ::-1]),  # Ultralytics works in BGR; Format flips back
+            ori_shape=(h, w),
+            resized_shape=(h, w),
+            ratio_pad=(1.0, 1.0),
+            cls=labels.reshape(-1, 1).astype(np.float32),
+            instances=Instances(
+                boxes.astype(np.float32),
+                np.zeros((0, 1000, 2), dtype=np.float32),
+                bbox_format="xyxy",
+                normalized=False,
+            ),
+        )
+        return sample
+
 
 class _SharedAugmentationMixin:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -71,33 +102,7 @@ class _SharedAugmentationMixin:
         super().__init__(*args, **kwargs)
 
     def build_transforms(self, hyp) -> Compose:
-        # Reuse the eval-mode pipeline (LetterBox, a no-op at 640×640, then Format) so none of
-        # Ultralytics' training augmentations are constructed.
-        augment, self.augment = self.augment, False
-        try:
-            return super().build_transforms(hyp)
-        finally:
-            self.augment = augment
-
-    def __getitem__(self, index: int) -> dict[str, Any]:
-        path = self.im_files[index]
-        image, boxes, labels = load_training_example(path, self.shared_augmentation, self.epoch, self.label_files[index])
-        h, w = image.shape[:2]
-        sample = {
-            "im_file": path,
-            "img": np.ascontiguousarray(image[..., ::-1]),  # Ultralytics works in BGR; Format flips back
-            "ori_shape": (h, w),
-            "resized_shape": (h, w),
-            "ratio_pad": (1.0, 1.0),
-            "cls": labels.reshape(-1, 1).astype(np.float32),
-            "instances": Instances(
-                boxes.astype(np.float32),
-                np.zeros((0, 1000, 2), dtype=np.float32),
-                bbox_format="xyxy",
-                normalized=False,
-            ),
-        }
-        return self.transforms(sample)
+        return Compose([SharedAugmentationTransform(self), Format()])
 
     def as_raw_example(self, index: int) -> Example:
         """What the model is actually fed, converted back to (path, RGB uint8, xyxy, 0-based labels)."""
