@@ -14,19 +14,28 @@ from ..classes import DEFAULT_CLASS_NAMES
 from .augmentations import SharedAugmentation, resize_example
 
 DATASET_URL = "https://github.com/ultralytics/assets/releases/download/v0.0.0/construction-ppe.zip"
-# Class order in the archive's data.yaml; the ids are kept, only "none" is renamed (see classes.py).
+# Class order in the archive's data.yaml.
 SOURCE_CLASS_NAMES = (
     "helmet", "gloves", "vest", "boots", "goggles", "none", "Person", "no_helmet", "no_goggle", "no_gloves", "no_boots",
 )
+# Source classes kept, by their name in DEFAULT_CLASS_NAMES; boxes of every other class are dropped. The source calls
+# class 5 "none"; it marks a torso without a safety vest, so it becomes "no_vest".
+KEPT_SOURCE_CLASSES = {"Person": "person", "vest": "vest", "none": "no_vest", "helmet": "helmet", "no_helmet": "no_helmet"}
 SPLITS = ("train", "valid", "test")
 SOURCE_SPLITS = {"train": "train", "valid": "val", "test": "test"}
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp")
 
 
 def download_dataset(root: str | Path, url: str = DATASET_URL) -> Path:
-    """Download Ultralytics Construction-PPE into `root` as <split>/{images,labels}; no-op if it is already there."""
+    """Download Ultralytics Construction-PPE into `root` as <split>/{images,labels}; no-op if it is already there.
+
+    Labels are rewritten to DEFAULT_CLASS_NAMES ids, keeping only the classes in KEPT_SOURCE_CLASSES.
+    """
     root = Path(root)
     if (root / "data.yaml").exists():
+        names = yaml.safe_load((root / "data.yaml").read_text())["names"]
+        if tuple(names.values() if isinstance(names, dict) else names) != DEFAULT_CLASS_NAMES:
+            raise ValueError(f"{root} holds a different class set; delete it and call download_dataset again")
         return root
 
     root.parent.mkdir(parents=True, exist_ok=True)
@@ -43,6 +52,7 @@ def download_dataset(root: str | Path, url: str = DATASET_URL) -> Path:
         names = tuple(names.values() if isinstance(names, dict) else names)
         if names != SOURCE_CLASS_NAMES:
             raise ValueError(f"Unexpected class order in the archive: {names}")
+        id_map = {names.index(source): DEFAULT_CLASS_NAMES.index(name) for source, name in KEPT_SOURCE_CLASSES.items()}
 
         # The archive uses images/<split> and labels/<split>; this repo pairs <split>/images with <split>/labels.
         staging = tmp / "out"
@@ -50,11 +60,18 @@ def download_dataset(root: str | Path, url: str = DATASET_URL) -> Path:
             (staging / split).mkdir(parents=True)
             shutil.move(src / "images" / source, staging / split / "images")
             shutil.move(src / "labels" / source, staging / split / "labels")
+            for label_path in (staging / split / "labels").glob("*.txt"):
+                _remap_label_file(label_path, id_map)
         config = {"train": "train/images", "val": "valid/images", "test": "test/images"}
         config |= {"nc": len(DEFAULT_CLASS_NAMES), "names": list(DEFAULT_CLASS_NAMES)}
         (staging / "data.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
         staging.rename(root)  # last step, so an interrupted download never leaves a half-built dataset
     return root
+
+
+def _remap_label_file(path: Path, id_map: dict[int, int]) -> None:
+    rows = [line.split(maxsplit=1) for line in path.read_text().splitlines() if line.strip()]
+    path.write_text("".join(f"{id_map[int(cls)]} {coords}\n" for cls, coords in rows if int(cls) in id_map))
 
 
 def check_dataset(root: str | Path, class_names: tuple[str, ...] = DEFAULT_CLASS_NAMES) -> dict[str, int]:

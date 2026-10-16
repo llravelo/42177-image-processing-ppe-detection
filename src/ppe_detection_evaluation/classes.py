@@ -1,25 +1,16 @@
-# Ultralytics Construction-PPE, in its own id order. The source calls class 5 "none"; it marks a torso
-# without a safety vest, so it is named "no_vest" here.
+# The subset of Ultralytics Construction-PPE this project detects, in our own id order (see KEPT_SOURCE_CLASSES in
+# dataset/core.py for how source ids map onto these).
 DEFAULT_CLASS_NAMES: tuple[str, ...] = (
-    "helmet",
-    "gloves",
+    "person",
     "vest",
-    "boots",
-    "goggles",
     "no_vest",
-    "Person",
+    "helmet",
     "no_helmet",
-    "no_goggle",
-    "no_gloves",
-    "no_boots",
 )
 
 PPE_PAIRS: dict[str, str] = {
     "helmet": "no_helmet",
     "vest": "no_vest",
-    "goggles": "no_goggle",
-    "gloves": "no_gloves",
-    "boots": "no_boots",
 }
 
 PPE_CLASSES: tuple[str, ...] = (*PPE_PAIRS, *PPE_PAIRS.values())
