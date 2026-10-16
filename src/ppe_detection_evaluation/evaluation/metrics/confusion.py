@@ -3,7 +3,7 @@ from typing import Any
 
 import numpy as np
 
-from ..classes import DEFAULT_CLASS_NAMES, PPE_PAIRS
+from ...classes import DEFAULT_CLASS_NAMES, PPE_PAIRS
 from ..records import ImageRecord
 from .matching import box_iou
 

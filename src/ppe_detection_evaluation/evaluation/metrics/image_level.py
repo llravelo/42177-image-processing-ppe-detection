@@ -3,7 +3,7 @@ from typing import Any
 
 import numpy as np
 
-from ..classes import DEFAULT_CLASS_NAMES, VIOLATION_CLASSES
+from ...classes import DEFAULT_CLASS_NAMES, VIOLATION_CLASSES
 from ..records import ImageRecord
 from .matching import ClassMatches, max_f1, pr_curve, precision_at_recall, step_average_precision
 

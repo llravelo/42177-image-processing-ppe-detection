@@ -7,7 +7,8 @@ from typing import Any
 
 import numpy as np
 
-from .classes import DEFAULT_CLASS_NAMES
+from ..classes import DEFAULT_CLASS_NAMES
+from ..experiment import IMAGE_SIZE
 from .metrics import (
     compute_detection_ap,
     compute_image_level_metrics,
@@ -25,7 +26,7 @@ class EvaluationFramework:
         config: ModelConfig,
         *,
         class_names: Sequence[str] = DEFAULT_CLASS_NAMES,
-        image_size: tuple[int, int] = (640, 640),
+        image_size: tuple[int, int] = (IMAGE_SIZE, IMAGE_SIZE),
         score_threshold: float = 0.001,
         max_detections: int = 100,
     ) -> None:

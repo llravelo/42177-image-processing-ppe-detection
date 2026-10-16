@@ -11,7 +11,7 @@ import albumentations as A
 import cv2
 import numpy as np
 
-IMAGE_SIZE = 640
+from ..experiment import IMAGE_SIZE
 
 # A1 — horizontal flip
 FLIP_P = 0.5
