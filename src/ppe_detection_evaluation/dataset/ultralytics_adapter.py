@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import yaml
 from ultralytics.cfg import get_cfg
 from ultralytics.data.augment import Compose
 from ultralytics.data.dataset import YOLODataset
@@ -20,8 +21,9 @@ from ultralytics.utils import colorstr
 from ultralytics.utils.instance import Instances
 from ultralytics.utils.torch_utils import unwrap_model
 
-from .augment import SharedAugmentation
-from .data import Example, load_training_example
+from ..classes import DEFAULT_CLASS_NAMES
+from .augmentations import SharedAugmentation
+from .core import Example, load_training_example
 
 # Zeroed so the saved args.yaml documents that no built-in augmentation ran. The shared dataset ignores
 # these anyway, except multi_scale, which the trainer applies to whole batches.
@@ -45,6 +47,21 @@ DISABLE_BUILTIN_AUGMENTATION: dict[str, Any] = {
     "multi_scale": 0.0,
     "rect": False,
 }
+
+
+def write_ultralytics_yaml(root: str | Path, class_names: tuple[str, ...] = DEFAULT_CLASS_NAMES) -> Path:
+    # Relative paths in data.yaml are resolved against the CWD by Ultralytics, so write absolute ones.
+    root = Path(root).resolve()
+    config = {
+        "path": str(root),
+        "train": "train/images",
+        "val": "valid/images",
+        "test": "test/images",
+        "names": dict(enumerate(class_names)),
+    }
+    path = root / "ultralytics.yaml"
+    path.write_text(yaml.safe_dump(config, sort_keys=False))
+    return path
 
 
 class _SharedAugmentationMixin:
