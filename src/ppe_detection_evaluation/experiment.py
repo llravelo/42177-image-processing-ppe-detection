@@ -16,7 +16,6 @@ PRETRAINED_DIR = MODELS_DIR / "pretrained"
 SEED = 0
 # Every model trains and is evaluated on IMAGE_SIZE × IMAGE_SIZE inputs.
 IMAGE_SIZE = 640
-# Scratch-run budget so every notebook runs end to end quickly. For the actual runs, raise it and add early stopping
-# on validation mAP; each epoch's examples stay shared, only the number of epochs a model trains for would then differ.
-EPOCH_BUDGET = 10
-# Batch size is deliberately not shared: each training notebook sets its own in its hyperparameter cell.
+# Upper bound on epochs for training runs; early stopping usually ends a run sooner.
+MAX_EPOCHS = 200
+# Early stopping and batch size are not shared: each training notebook sets them in its hyperparameter cell.
