@@ -1,9 +1,7 @@
-import hashlib
 import shutil
 import tempfile
 import urllib.request
 import zipfile
-from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import cv2
@@ -11,7 +9,7 @@ import numpy as np
 import yaml
 
 from ..classes import DEFAULT_CLASS_NAMES
-from .augmentations import SharedAugmentation, resize_example
+from .augmentations import resize_example
 
 DATASET_URL = "https://github.com/ultralytics/assets/releases/download/v0.0.0/construction-ppe.zip"
 # Class order in the archive's data.yaml.
@@ -92,25 +90,14 @@ def check_dataset(root: str | Path, class_names: tuple[str, ...] = DEFAULT_CLASS
     return {split: len(list_images(root, split)) for split in SPLITS if (root / split).exists()}
 
 
-def class_box_stats(
+def class_box_counts(
     root: str | Path, split: str = "train", class_names: tuple[str, ...] = DEFAULT_CLASS_NAMES
-) -> dict[str, dict[str, float]]:
-    """Per-class box counts and the share of boxes whose shorter side is under 16 / 32 px."""
-    sides: dict[int, list[float]] = {i: [] for i in range(len(class_names))}
+) -> dict[str, int]:
+    counts = np.zeros(len(class_names), dtype=int)
     for image_path in list_images(root, split):
-        h, w = cv2.imread(str(image_path)).shape[:2]
-        labels, boxes = read_yolo_labels(label_path_for(image_path))
-        for label, (_, _, bw, bh) in zip(labels, boxes):
-            sides[int(label)].append(min(bw * w, bh * h))
-    stats = {}
-    for i, name in enumerate(class_names):
-        s = np.asarray(sides[i])
-        stats[name] = {
-            "count": len(s),
-            "under_16px": float((s < 16).mean()) if len(s) else float("nan"),
-            "under_32px": float((s < 32).mean()) if len(s) else float("nan"),
-        }
-    return stats
+        labels, _ = read_yolo_labels(label_path_for(image_path))
+        np.add.at(counts, labels.astype(int), 1)
+    return dict(zip(class_names, counts.tolist()))
 
 
 def list_images(root: str | Path, split: str) -> list[Path]:
@@ -167,47 +154,7 @@ def load_example(image_path: str | Path, label_path: str | Path | None = None) -
     return image, cxcywh_to_xyxy(boxes, w, h).astype(np.float32), labels
 
 
-def load_training_example(
-    image_path: str | Path,
-    augmentation: SharedAugmentation,
-    epoch: int,
-    label_path: str | Path | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """The single entry point every model's training dataset goes through."""
-    image, boxes, labels = load_example(image_path, label_path)
-    return augmentation(image, boxes, labels, epoch=epoch, key=Path(image_path).name)
-
-
 def load_eval_example(image_path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Validation/test counterpart of `load_training_example`: no augmentation, only the resize to 640×640."""
+    """Validation/test preprocessing: no augmentation, only the resize to 640×640."""
     return resize_example(*load_example(image_path))
 
-
-Example = tuple[str, np.ndarray, np.ndarray, np.ndarray]
-
-
-def verify_same_examples(
-    get_example: Callable[[int], Example],
-    indices: Iterable[int],
-    augmentation: SharedAugmentation,
-    epoch: int,
-) -> str:
-    """Check a model's training dataset against the shared pipeline and return a fingerprint.
-
-    `get_example(i)` must return (image path, RGB uint8 image, pixel xyxy boxes, 0-based labels) as the
-    model's dataset produces them for the current epoch. The fingerprint covers image bytes and labels
-    only (box coordinates pass through float32 in some stacks), so it is equal across notebooks iff
-    the models see the same examples.
-    """
-    digest = hashlib.sha256()
-    for i in indices:
-        path, image, boxes, labels = get_example(i)
-        ref_image, ref_boxes, ref_labels = load_training_example(path, augmentation, epoch)
-        if not np.array_equal(image, ref_image):
-            raise AssertionError(f"{path}: image differs from the shared pipeline")
-        if not np.array_equal(labels, ref_labels) or not np.allclose(boxes, ref_boxes, atol=1e-2):
-            raise AssertionError(f"{path}: boxes/labels differ from the shared pipeline")
-        digest.update(Path(path).name.encode())
-        digest.update(ref_image.tobytes())
-        digest.update(ref_labels.tobytes())
-    return digest.hexdigest()[:16]

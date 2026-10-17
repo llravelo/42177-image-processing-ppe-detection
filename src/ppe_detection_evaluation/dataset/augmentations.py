@@ -1,11 +1,8 @@
-"""Shared training-time augmentation (see AUGMENTATIONS.md).
+"""Training-time augmentation family shared by all four detectors (see AUGMENTATIONS.md).
 
-Every detector trains on the output of `SharedAugmentation`, which reseeds the pipeline from
-(seed, epoch, image name). The augmented example for a given image and epoch is therefore
-identical across models, DataLoader workers, batch sizes and shuffle orders.
+The torchvision models use `build_train_transform`; the Ultralytics models get the same steps and ranges through
+`ULTRALYTICS_AUGMENTATION` in `ultralytics_adapter.py`, which is derived from the constants below.
 """
-
-import hashlib
 
 import albumentations as A
 import cv2
@@ -19,26 +16,13 @@ FLIP_P = 0.5
 SCALE_RANGE = (0.75, 1.25)
 TRANSLATE_RANGE = (-0.1, 0.1)
 FILL_VALUE = 114
-# A3 — brightness / contrast jitter. Saturation and hue stay fixed: hi-vis colour is what separates vest from no_vest.
+# A3 — brightness jitter. Saturation and hue stay fixed: hi-vis colour is what separates vest from no_vest.
 BRIGHTNESS = 0.4
-CONTRAST = 0.3
 
 # A box that loses more than 60 % of its area to the frame edge no longer shows enough of the
 # head/torso to tell e.g. helmet from no_helmet, so it is dropped rather than kept as label noise.
 MIN_VISIBILITY = 0.4
 MIN_BOX_SIZE = 3
-
-
-def _bbox_params() -> A.BboxParams:
-    return A.BboxParams(
-        format="pascal_voc",
-        label_fields=["labels"],
-        min_visibility=MIN_VISIBILITY,
-        min_width=MIN_BOX_SIZE,
-        min_height=MIN_BOX_SIZE,
-        clip=True,
-    )
-
 
 def build_train_transform(seed: int | None = None) -> A.Compose:
     return A.Compose(
@@ -47,15 +31,23 @@ def build_train_transform(seed: int | None = None) -> A.Compose:
             A.HorizontalFlip(p=FLIP_P),
             A.Affine(
                 scale=SCALE_RANGE,
+                keep_ratio=True,  # one gain for both axes, as in Ultralytics
                 translate_percent=TRANSLATE_RANGE,
                 fill=FILL_VALUE,
                 border_mode=cv2.BORDER_CONSTANT,
                 p=1.0,
             ),
-            # saturation and hue must be passed as 0: ColorJitter's defaults would jitter them.
-            A.ColorJitter(brightness=BRIGHTNESS, contrast=CONTRAST, saturation=0.0, hue=0.0, p=1.0),
+            # contrast, saturation and hue must be passed as 0: ColorJitter's defaults would jitter them.
+            A.ColorJitter(brightness=BRIGHTNESS, contrast=0.0, saturation=0.0, hue=0.0, p=1.0),
         ],
-        bbox_params=_bbox_params(),
+        bbox_params=A.BboxParams(
+            format="pascal_voc",
+            label_fields=["labels"],
+            min_visibility=MIN_VISIBILITY,
+            min_width=MIN_BOX_SIZE,
+            min_height=MIN_BOX_SIZE,
+            clip=True,
+        ),
         seed=seed,
     )
 
@@ -68,39 +60,3 @@ def resize_example(
     resized = cv2.resize(image, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_LINEAR)  # A.Resize's default
     scale = np.array([IMAGE_SIZE / w, IMAGE_SIZE / h, IMAGE_SIZE / w, IMAGE_SIZE / h], dtype=np.float32)
     return resized, (boxes.reshape(-1, 4) * scale).astype(np.float32), labels
-
-
-def sample_seed(seed: int, epoch: int, key: str) -> int:
-    # hashlib rather than hash(): str hashes are salted per process, which would differ per worker.
-    digest = hashlib.blake2b(f"{seed}:{epoch}:{key}".encode(), digest_size=4).digest()
-    return int.from_bytes(digest, "little")
-
-
-class SharedAugmentation:
-    """The training augmentation, reseeded per image so it is identical across models and DataLoader workers.
-
-    Albumentations otherwise draws from a generator whose state depends on the worker process and on how many
-    images it has already augmented (batch size, shuffle order), so each model would see different examples.
-    """
-
-    def __init__(self, seed: int = 0) -> None:
-        self.seed = seed
-        self.transform = build_train_transform(seed)
-
-    def __call__(
-        self,
-        image: np.ndarray,
-        boxes: np.ndarray,
-        labels: np.ndarray,
-        *,
-        epoch: int,
-        key: str,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Augment an RGB uint8 image with pixel xyxy `boxes` and 0-based class `labels`."""
-        self.transform.set_random_seed(sample_seed(self.seed, epoch, key))
-        out = self.transform(image=image, bboxes=boxes.reshape(-1, 4), labels=labels)
-        return (
-            out["image"],
-            np.asarray(out["bboxes"], dtype=np.float32).reshape(-1, 4),
-            np.asarray(out["labels"], dtype=np.int64),
-        )

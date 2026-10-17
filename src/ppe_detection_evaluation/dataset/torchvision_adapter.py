@@ -1,10 +1,10 @@
 from pathlib import Path
 
+import albumentations as A
 import numpy as np
 import torch
 
-from .augmentations import SharedAugmentation
-from .core import Example, list_images, load_training_example
+from .core import list_images, load_example
 
 
 class TorchvisionDataset(torch.utils.data.Dataset):
@@ -15,28 +15,27 @@ class TorchvisionDataset(torch.utils.data.Dataset):
     Lives in the package rather than a notebook because DataLoader workers must be able to import it.
     """
 
-    def __init__(self, root: str | Path, split: str, augmentation: SharedAugmentation) -> None:
+    def __init__(self, root: str | Path, split: str, transform: A.Compose) -> None:
         self.image_paths = list_images(root, split)
-        self.augmentation = augmentation
-        self.epoch = 0
-
-    def set_epoch(self, epoch: int) -> None:
-        # Workers are re-created every epoch (persistent_workers=False), so they pick this up.
-        self.epoch = epoch
+        self.transform = transform
 
     def __len__(self) -> int:
         return len(self.image_paths)
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        image, boxes, labels = load_training_example(self.image_paths[index], self.augmentation, self.epoch)
-        image = torch.from_numpy(np.ascontiguousarray(image)).permute(2, 0, 1).float() / 255
-        return image, {"boxes": torch.from_numpy(boxes).reshape(-1, 4), "labels": torch.from_numpy(labels + 1)}
+        image, boxes, labels = load_example(self.image_paths[index])
+        out = self.transform(image=image, bboxes=boxes, labels=labels)
+        image = torch.from_numpy(np.ascontiguousarray(out["image"])).permute(2, 0, 1).float() / 255
+        boxes = torch.as_tensor(np.asarray(out["bboxes"], dtype=np.float32)).reshape(-1, 4)
+        labels = torch.as_tensor(np.asarray(out["labels"], dtype=np.int64))
+        return image, {"boxes": boxes, "labels": labels + 1}
 
-    def as_raw_example(self, index: int) -> Example:
-        """What the model is actually fed, converted back to (path, RGB uint8, xyxy, 0-based labels)."""
-        image, target = self[index]
-        image = (image * 255).round().byte().permute(1, 2, 0).numpy()
-        return str(self.image_paths[index]), image, target["boxes"].numpy(), target["labels"].numpy() - 1
+
+def seed_worker(worker_id: int) -> None:
+    # Forked workers inherit identical Albumentations RNG state and would all draw the same augmentations.
+    # torch.initial_seed() differs per worker and follows the DataLoader's generator, so runs stay reproducible.
+    dataset = torch.utils.data.get_worker_info().dataset
+    dataset.transform.set_random_seed(torch.initial_seed() % 2**32)
 
 
 def collate(batch):

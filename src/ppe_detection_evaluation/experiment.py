@@ -1,8 +1,4 @@
-"""Settings every model notebook imports, so all four detectors train on the same examples.
-
-The augmented example for an image is a function of (SEED, epoch, image name) only, so a shared SEED means every
-model sees exactly the same example for a given image and epoch.
-"""
+"""Settings every model notebook imports, so all four detectors share paths, seed, input size and epoch cap."""
 
 from pathlib import Path
 
