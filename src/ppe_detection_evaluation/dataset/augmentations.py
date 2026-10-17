@@ -19,16 +19,9 @@ FLIP_P = 0.5
 SCALE_RANGE = (0.75, 1.25)
 TRANSLATE_RANGE = (-0.1, 0.1)
 FILL_VALUE = 114
-# A3 — photometric jitter
+# A3 — brightness / contrast jitter. Saturation and hue stay fixed: hi-vis colour is what separates vest from no_vest.
 BRIGHTNESS = 0.4
 CONTRAST = 0.3
-SATURATION = 0.5
-HUE = 0.015
-# A4 — capture degradation, one of blur / noise / JPEG
-DEGRADATION_P = 0.25
-BLUR_SIGMA_RANGE = (0.1, 1.5)
-NOISE_STD_RANGE = (0.02, 0.06)
-JPEG_QUALITY_RANGE = (40, 90)
 
 # A box that loses more than 60 % of its area to the frame edge no longer shows enough of the
 # head/torso to tell e.g. helmet from no_helmet, so it is dropped rather than kept as label noise.
@@ -59,16 +52,8 @@ def build_train_transform(seed: int | None = None) -> A.Compose:
                 border_mode=cv2.BORDER_CONSTANT,
                 p=1.0,
             ),
-            A.ColorJitter(brightness=BRIGHTNESS, contrast=CONTRAST, saturation=SATURATION, hue=HUE, p=1.0),
-            A.OneOf(
-                [
-                    # blur_limit=0 derives the kernel size from sigma
-                    A.GaussianBlur(blur_limit=0, sigma_limit=BLUR_SIGMA_RANGE, p=1.0),
-                    A.GaussNoise(std_range=NOISE_STD_RANGE, p=1.0),
-                    A.ImageCompression(quality_range=JPEG_QUALITY_RANGE, p=1.0),
-                ],
-                p=DEGRADATION_P,
-            ),
+            # saturation and hue must be passed as 0: ColorJitter's defaults would jitter them.
+            A.ColorJitter(brightness=BRIGHTNESS, contrast=CONTRAST, saturation=0.0, hue=0.0, p=1.0),
         ],
         bbox_params=_bbox_params(),
         seed=seed,

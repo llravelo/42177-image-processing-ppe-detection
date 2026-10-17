@@ -20,7 +20,15 @@ SOURCE_CLASS_NAMES = (
 )
 # Source classes kept, by their name in DEFAULT_CLASS_NAMES; boxes of every other class are dropped. The source calls
 # class 5 "none"; it marks a torso without a safety vest, so it becomes "no_vest".
-KEPT_SOURCE_CLASSES = {"Person": "person", "vest": "vest", "none": "no_vest", "helmet": "helmet", "no_helmet": "no_helmet"}
+KEPT_SOURCE_CLASSES = {
+    "Person": "person",
+    "vest": "vest",
+    "none": "no_vest",
+    "helmet": "helmet",
+    "no_helmet": "no_helmet",
+    "gloves": "gloves",
+    "no_gloves": "no_gloves",
+}
 SPLITS = ("train", "valid", "test")
 SOURCE_SPLITS = {"train": "train", "valid": "val", "test": "test"}
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp")

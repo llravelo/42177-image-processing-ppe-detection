@@ -6,11 +6,14 @@ DEFAULT_CLASS_NAMES: tuple[str, ...] = (
     "no_vest",
     "helmet",
     "no_helmet",
+    "gloves",
+    "no_gloves",
 )
 
 PPE_PAIRS: dict[str, str] = {
     "helmet": "no_helmet",
     "vest": "no_vest",
+    "gloves": "no_gloves",
 }
 
 PPE_CLASSES: tuple[str, ...] = (*PPE_PAIRS, *PPE_PAIRS.values())
