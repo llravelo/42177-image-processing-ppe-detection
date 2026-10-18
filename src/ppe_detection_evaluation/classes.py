@@ -1,24 +1,32 @@
-# The subset of Ultralytics Construction-PPE this project detects, in our own id order (see KEPT_SOURCE_CLASSES in
-# dataset/core.py for how source ids map onto these).
 DEFAULT_CLASS_NAMES: tuple[str, ...] = (
-    "person",
-    "vest",
-    "no_vest",
-    "helmet",
-    "no_helmet",
-    "gloves",
-    "no_gloves",
+    "Hardhat",
+    "Mask",
+    "NO-Hardhat",
+    "NO-Mask",
+    "NO-Safety Vest",
+    "Person",
+    "Safety Cone",
+    "Safety Vest",
+    "machinery",
+    "vehicle",
 )
 
+PPE_CLASSES: tuple[str, ...] = (
+    "Hardhat",
+    "Mask",
+    "Safety Vest",
+    "NO-Hardhat",
+    "NO-Mask",
+    "NO-Safety Vest",
+)
+
+VIOLATION_CLASSES: tuple[str, ...] = ("NO-Hardhat", "NO-Mask", "NO-Safety Vest")
+
 PPE_PAIRS: dict[str, str] = {
-    "helmet": "no_helmet",
-    "vest": "no_vest",
-    "gloves": "no_gloves",
+    "Hardhat": "NO-Hardhat",
+    "Mask": "NO-Mask",
+    "Safety Vest": "NO-Safety Vest",
 }
-
-PPE_CLASSES: tuple[str, ...] = (*PPE_PAIRS, *PPE_PAIRS.values())
-
-VIOLATION_CLASSES: tuple[str, ...] = tuple(PPE_PAIRS.values())
 
 
 def default_class_groups(class_names: tuple[str, ...]) -> dict[str, tuple[str, ...]]:
